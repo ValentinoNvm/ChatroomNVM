@@ -6,10 +6,11 @@
 #include <unistd.h>
 #include <fstream>
 #include <vector>
-#include "functions.h"
-int CheckRecv(int l);
+#include <string>  // per std::string
 
-class Server{
+int CheckRecv(int l); // controlla e stampa errore o successo
+
+class Server {
 public:
     int InitSocket(int domain, int type, int protocol);
     void BindSocket(int socket, sockaddr* address, socklen_t length);
@@ -18,17 +19,16 @@ public:
     static int CloseConnection(int socket);
 };
 
-class Client{
+class Client {
 public:
-    Client(int socket) : m_socket(socket) { }  //lista inizializzazione costruttore per incapsulamento
+    Client(int socket) : m_socket(socket) { }  // inizializza socket
     int RecvData(void* buff, size_t size, int flags);
     void SendData(const void* buff, size_t size, int flags);
 private:
     int m_socket;
 };
 
-
-class FileTransfer{
+class FileTransfer {
 public:
     void RecvFile(std::string nome, std::streampos size, Client& client, void* buff, size_t ss, int flags);
     static std::string ExtractExtension(const std::string filename);
@@ -36,9 +36,7 @@ public:
     int SendFile();
 };
 
-class Logger{
+class Logger {
 public:
     static int LogError(int sock);
 };
-
-

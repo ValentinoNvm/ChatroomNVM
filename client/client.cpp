@@ -1,91 +1,134 @@
+// ===== client.cpp =====
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <unistd.h>
-#include <fstream>
-#include <vector>
-#include "functions.h"
-#define BUFFER_SIZE 1024
+#include <string>
+#include <thread>
+#include <cstdint>    // uint32_t, uint64_t
+#include <endian.h>   // ntohl, htonl, be64toh, htobe64
 
-int main(){
+#define PORT        8080
+#define BUF_SIZE    1024
 
-    Client cl; Server serv; FileManager fm; Config cf;
+// Thread che ricevere messaggi o file dal server
+void receive_loop(int sock) {
+    while (true) {
+        uint32_t raw_type;
+        if (recv(sock, &raw_type, sizeof(raw_type), 0) <= 0) break;
+        uint32_t type = ntohl(raw_type);
 
-    std::string  nome;  //stringa nome file
+        if (type == 0) {
+            // testo
+            uint32_t raw_len;
+            recv(sock, &raw_len, sizeof(raw_len), 0);
+            uint32_t len = ntohl(raw_len);
 
-    std::vector<char> buffer (BUFFER_SIZE); //vettore per inviare file
-    std::vector <char> m1 (BUFFER_SIZE); std::vector <char> m2 (BUFFER_SIZE);
-    int scelta = 0;  //scelta comunicazione
+            char buf[BUF_SIZE];
+            recv(sock, buf, len, 0);
+            buf[len] = '\0';
+            std::cout << "[MSG] " << buf << std::endl;
 
-    int sockettone = cl.InitSocket(AF_INET, SOCK_STREAM, 0);
+        } else if (type == 1) {
+            // file
+            uint32_t raw_fn;
+            recv(sock, &raw_fn, sizeof(raw_fn), 0);
+            uint32_t fnlen = ntohl(raw_fn);
 
-    //configurazione indirizzo
-    sockaddr_in indirizzo;
-    sockaddr_in * ptr = &indirizzo;
-    cf.ConfigAdddr(ptr);
+            char name[256];
+            recv(sock, name, fnlen, 0);
+            name[fnlen] = '\0';
 
-    cl.ConnectSocket(sockettone, (struct sockaddr*)&indirizzo, sizeof(indirizzo));
+            uint64_t netfs;
+            recv(sock, &netfs, sizeof(netfs), 0);
+            uint64_t fsize = be64toh(netfs);
 
-
-    while(true){
-        cf.ChooseOption(scelta); //scelgo cosaf are
-        if (scelta == 9){
-            serv.ChooseComm(sockettone, reinterpret_cast<const char*>(&scelta), sizeof(scelta), 0);
-            break;
+            std::FILE* fp = fopen(name, "wb");
+            uint64_t rec = 0;
+            char buf[BUF_SIZE];
+            while (rec < fsize) {
+                ssize_t r = recv(sock, buf, BUF_SIZE, 0);
+                if (r <= 0) break;
+                fwrite(buf, 1, r, fp);
+                rec += r;
+            }
+            fclose(fp);
+            std::cout << "[FILE] ricevuto \"" << name << "\"" << std::endl;
         }
+    }
+}
 
-        serv.ChooseComm(sockettone, reinterpret_cast<const char*>(&scelta), sizeof(scelta), 0);
+int main() {
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) { perror("socket"); return 1; }
 
-        switch(scelta){
-            case 0: {
-                fm.ChooseFile(nome);
-                //devo inviare al server la scelta di voler inviare un file..
+    sockaddr_in srv{};
+    srv.sin_family = AF_INET;
+    srv.sin_port = htons(PORT);
+    inet_pton(AF_INET, "127.0.0.1", &srv.sin_addr);
 
-                //apertura file
-                std::ifstream file (nome, std::ios::in | std::ios::binary | std::ios::ate);
+    if (connect(sock, (sockaddr*)&srv, sizeof(srv)) < 0) {
+        perror("connect"); return 1;
+    }
 
-                if(file.is_open()){
+    // lancio il thread per ricevere
+    std::thread t(receive_loop, sock);
 
-                    std::streampos size = file.tellg();
+    std::string line;
+    while (std::getline(std::cin, line)) {
+        if (line == "quit") break;
 
-                    file.seekg(0, std::ios::beg);
-
-                    fm.MultipleSend(sockettone, size, buffer, nome); //qua dentro ci sono 4 send
-
-                    fm.SendFile(file, buffer, sockettone); //invio file
-
-                    file.close();
-                }
-                else std::cout << "impossibile aprire il file";
-
-                break;
+        if (line.rfind("send ", 0) == 0) {
+            // invio file
+            std::string fname = line.substr(5);
+            FILE* f = fopen(fname.c_str(), "rb");
+            if (!f) {
+                std::cerr << "Errore: non trovo " << fname << "\n";
+                continue;
             }
 
-            case 1: {
-                std::cout << "hai scelto i messaggi";
+            // header type
+            uint32_t t = htonl(1);
+            send(sock, &t, sizeof(t), 0);
 
-                //serv.snd(sockettone, reinterpret_cast<const char*>(&scelta), sizeof(scelta),0); //comunicazione scelta al server
+            // nome file
+            uint32_t fn = htonl(fname.size());
+            send(sock, &fn, sizeof(fn), 0);
+            send(sock, fname.c_str(), fname.size(), 0);
 
-                while(true){
-                    std::cout << std::endl;
-                    std::cout << "tu: ";
-                    std::cin.getline(m1.data(), m1.size());
-                    if(std::string(m1.data()) == "exit"){
-                        serv.snd(sockettone, m1.data(), m1.size(),0);
-                    }
-                    serv.snd(sockettone, m1.data(), m2.size(),0);
-                    serv.rcv(sockettone, m2.data(), m2.size(),0);
-                    std::cout << "Server: " << m2.data() << std::endl;
-                }
-                break;
+            // dimensione
+            fseek(f, 0, SEEK_END);
+            uint64_t size = ftell(f);
+            rewind(f);
+            uint64_t netfs = htobe64(size);
+            send(sock, &netfs, sizeof(netfs), 0);
+
+            // dati
+            char buf[BUF_SIZE];
+            uint64_t sent = 0;
+            while (sent < size) {
+                size_t r = fread(buf, 1, BUF_SIZE, f);
+                send(sock, buf, r, 0);
+                sent += r;
             }
-            default:
-                std::cout << "operazione non valida. " << std::endl;
+            fclose(f);
+
+        } else {
+            // invio messaggio di testo
+            uint32_t t = htonl(0);
+            send(sock, &t, sizeof(t), 0);
+
+            uint32_t len = htonl(line.size());
+            send(sock, &len, sizeof(len), 0);
+            send(sock, line.c_str(), line.size(), 0);
         }
     }
 
-    //chiusura socket
-    close(sockettone);
+    close(sock);
+    t.join();
     return 0;
 }

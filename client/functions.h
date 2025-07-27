@@ -6,39 +6,37 @@
 #include <unistd.h>
 #include <fstream>
 #include <vector>
-//classe per inizializzazione socket lato client
+#include <string>  // per std::string
 
-class Config{
+int CheckRecv(int l); // controlla e stampa errore o successo
+
+class Server {
 public:
-    void ConfigAdddr(sockaddr_in* &addr);
-     void ChooseOption(int &scelta);
-
+    int InitSocket(int domain, int type, int protocol);
+    void BindSocket(int socket, sockaddr* address, socklen_t length);
+    void StartListenSocket(int socket, int queue);
+    int AcceptClient(int socket, sockaddr* address, socklen_t* length);
+    static int CloseConnection(int socket);
 };
 
-class Client{
+class Client {
 public:
-    int InitSocket(int domain, int type, int protocol );
-    int ConnectSocket(int sock, sockaddr* addr , size_t address);
-
+    Client(int socket) : m_socket(socket) { }  // inizializza socket
+    int RecvData(void* buff, size_t size, int flags);
+    void SendData(const void* buff, size_t size, int flags);
+private:
+    int m_socket;
 };
 
-//classe per comunicare con il server
-class Server{
+class FileTransfer {
 public:
-    int ChooseComm(int sock, const void* buff, size_t dim, int flags);
-    int snd(int sock, const void* buff, size_t size, int flags);
-    int rcv(int sock,  void* buff, size_t size, int flags);
-
+    void RecvFile(std::string nome, std::streampos size, Client& client, void* buff, size_t ss, int flags);
+    static std::string ExtractExtension(const std::string filename);
+    // void CalcName(const std::string name, const std::string name1, const std::string name2);
+    int SendFile();
 };
 
-class FileManager{
+class Logger {
 public:
-    void ChooseFile( std::string &nome);
-    std::streampos CalcSendFile(std::streampos size, std::string name);
-    int MultipleSend(int socket, std::streampos size, std::vector<char>& buffer, std::string nome);
-    void SendFile(std::ifstream& file, std::vector <char> buffer, int socket);
+    static int LogError(int sock);
 };
-
-
-
-int Checksock(int func);
